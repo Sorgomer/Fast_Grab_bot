@@ -1,5 +1,6 @@
 from functools import lru_cache
 from typing import Optional
+import os
 
 from pydantic import HttpUrl, Field
 from pydantic_settings import BaseSettings
@@ -12,7 +13,7 @@ class AppSettings(BaseSettings):
     webhook_url: HttpUrl = Field(alias="WEBHOOK_URL")
     webhook_path: str = Field(default="/webhook", alias="WEBHOOK_PATH")
     webapp_host: str = Field(default="0.0.0.0", alias="WEBAPP_HOST")
-    webapp_port: int = Field(default=8000, alias="PORT")
+    webapp_port: int = Field(default_factory=lambda: int(os.getenv("PORT", 8000)), alias="PORT")
 
     # Redis
     redis_dsn: Optional[str] = Field(default=None, alias="REDIS_DSN")

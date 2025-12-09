@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: download-bot
+    name: Fast_Grab_bot
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
@@ -14,8 +14,6 @@ services:
         value: "/webhook"
       - key: WEBAPP_HOST
         value: "0.0.0.0"
-      - key: PORT
-        value: "8000"
       - key: DOWNLOAD_DIR
         value: "/tmp/downloads"
       - key: MAX_FILE_SIZE_MB
