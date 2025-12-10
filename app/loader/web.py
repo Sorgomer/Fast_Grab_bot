@@ -12,7 +12,7 @@ async def on_startup(app: web.Application):
     bot: Bot = app["bot"]
     await bot.set_webhook(
         url=str(settings.webhook_url) + settings.webhook_path,
-        allowed_updates=bot.allowed_updates,
+        allowed_updates=app["dp"].resolve_used_update_types(),
         drop_pending_updates=True,
     )
     logger.info("Webhook set to {}", settings.webhook_url + settings.webhook_path)
