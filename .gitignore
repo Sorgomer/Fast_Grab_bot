@@ -1,0 +1,116 @@
+# =========================================
+# Python
+# =========================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.swp
+*.tmp
+*.log
+
+# Byte-compiled / optimized / DLL files
+*.so
+
+# Virtual environment
+venv/
+.env/
+env/
+ENV/
+
+# Ignore Python package build artifacts
+build/
+dist/
+*.egg-info/
+
+# =========================================
+# Project-specific: Telegram bot files
+# =========================================
+
+# Downloaded temporary media
+downloads/
+tmp/
+*/downloads/
+*/tmp/
+
+# yt-dlp cache
+.ytdl_cache/
+.yt-dlp-cache/
+.yt-dlp-temp/
+
+# Pics, thumbnails created by yt-dlp
+*.jpg
+*.jpeg
+*.png
+*.webp
+
+# ffmpeg temp files
+*.part
+*.partial
+*.parts
+*.mkv.tmp
+*.mp4.tmp
+*.webm.tmp
+
+# =========================================
+# OS files
+# =========================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+
+# =========================================
+# IDE / Editor files
+# =========================================
+
+# PyCharm / JetBrains
+.idea/
+*.iml
+
+# VSCode
+.vscode/
+.history/
+
+# =========================================
+# Environment & secrets
+# =========================================
+
+# Local environment variables
+.env
+.env.*
+*.key
+*.pem
+
+# =========================================
+# Aiohttp / Render temp files
+# =========================================
+
+# Webhook certs (если когда-то будешь использовать)
+cert.pem
+key.pem
+
+# =========================================
+# Redis / Cache
+# =========================================
+*.rdb
+*.aof
+
+# =========================================
+# Logs
+# =========================================
+logs/
+*.log
+*.out
+
+# =========================================
+# Test artifacts
+# =========================================
+.coverage
+pytest_cache/
+htmlcov/
