@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from aiogram import Dispatcher
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram import Bot, Dispatcher
 
 from app.di import Container
 from app.presentation.routers.common import router as common_router
@@ -12,8 +11,11 @@ from app.presentation.middlewares.throttling import ThrottlingMiddleware
 from app.presentation.middlewares.logging import LoggingMiddleware
 
 
-def build_dispatcher(container: Container) -> Dispatcher:
-    dp = Dispatcher(storage=MemoryStorage())
+def build_dispatcher_and_bot(container: Container) -> tuple[Bot, Dispatcher]:
+    settings = container.settings
+
+    bot = Bot(token=settings.bot_token)
+    dp = Dispatcher()
 
     # Middlewares
     dp.message.middleware(LoggingMiddleware())
@@ -32,4 +34,4 @@ def build_dispatcher(container: Container) -> Dispatcher:
         enqueue=container.get("enqueue_download_uc"),
     )
 
-    return dp
+    return bot, dp

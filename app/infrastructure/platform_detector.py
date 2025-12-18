@@ -27,7 +27,7 @@ class PlatformDetector:
         if "youtube.com" in host or "youtu.be" in host:
             return Platform.YOUTUBE
 
-        if host.endswith("vk.com") or host.endswith("vk.ru"):
+        if host.endswith("vk.com") or host.endswith("vk.ru") or host.endswith("vkvideo.ru") or host.endswith("vkvideo.com"):
             return Platform.VK
 
         raise UnsupportedPlatformError("Поддерживаются только YouTube и VK Video.")

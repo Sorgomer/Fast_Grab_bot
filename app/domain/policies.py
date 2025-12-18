@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import hashlib
@@ -7,6 +8,7 @@ from .errors import ValidationError
 from .models import (
     AudioCodec,
     AudioSpec,
+    ChoiceAvailability,
     Container,
     FormatChoice,
     StreamSpec,
@@ -16,12 +18,21 @@ from .models import (
 
 
 @dataclass(frozen=True, slots=True)
+class TelegramLimits:
+    hard_bytes: int
+    safe_bytes: int
+    risky_bytes: int
+    best_effort_from_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class RawExtractorFormat:
     """
     Raw format view coming from infrastructure extractor (yt-dlp).
-    Infrastructure will map yt-dlp info_dict into this structure.
+    Infrastructure maps yt-dlp info_dict into this structure.
     """
     extractor_format_id: str
+
     is_video: bool
     is_audio: bool
 
@@ -35,14 +46,12 @@ class RawExtractorFormat:
     vbr_kbps: int | None
     abr_kbps: int | None
 
-    ext: str | None  # source ext (not final container)
+    ext: str | None
     filesize_bytes: int | None
 
 
 def _fps_int(fps: float | None) -> int:
-    if fps is None:
-        return 0
-    if fps < 0:
+    if fps is None or fps <= 0:
         return 0
     return int(round(fps))
 
@@ -53,124 +62,155 @@ def _stable_choice_id(platform_key: str, height: int, fps_int: int, vcodec: Vide
 
 
 def choose_container(*, vcodec: VideoCodec, acodec: AudioCodec) -> Container:
-    """
-    Deterministic container policy.
-    Conservative:
-      - MP4 for H264/H265 with AAC (typical)
-      - MKV for VP9/AV1/OPUS/VORBIS to avoid compatibility issues
-    """
-    if vcodec in (VideoCodec.VP9, VideoCodec.AV1):
+    # safest default: MP4 with H.264(+AAC). Anything else increases risk.
+    if vcodec in (VideoCodec.AV1, VideoCodec.VP9):
         return Container.MKV
     if acodec in (AudioCodec.OPUS, AudioCodec.VORBIS):
         return Container.MKV
     return Container.MP4
 
 
-def build_label(*, height: int, fps_int: int, vcodec: VideoCodec, container: Container) -> str:
+def _estimate_total_bytes(video: RawExtractorFormat, audio: RawExtractorFormat) -> int | None:
+    if video.filesize_bytes is None or audio.filesize_bytes is None:
+        return None
+    total = int(video.filesize_bytes) + int(audio.filesize_bytes)
+    # small muxing overhead
+    return int(total * 1.01)
+
+
+def _risk_boost(*, height: int, fps_int: int, vcodec: VideoCodec, container: Container) -> int:
+    """
+    Purely UX-level risk heuristic.
+    - 4K/60fps are common pain points in Telegram delivery and processing.
+    - MKV/AV1/VP9 increase compatibility risk.
+    """
+    boost = 0
+    if height >= 2160:
+        boost += 2
+    if fps_int >= 60:
+        boost += 2
+    if container == Container.MKV:
+        boost += 1
+    if vcodec in (VideoCodec.AV1, VideoCodec.VP9):
+        boost += 1
+    return boost
+
+
+def _availability(*, estimated: int | None, limits: TelegramLimits, risk_boost: int) -> ChoiceAvailability:
+    if estimated is not None and estimated > limits.hard_bytes:
+        return ChoiceAvailability.UNAVAILABLE
+
+    # Unknown size => cannot guarantee; show risky (but not blocked).
+    if estimated is None:
+        return ChoiceAvailability.RISKY
+
+    # Safe zone upper bound, but boost can move it to risky.
+    if estimated <= limits.safe_bytes and risk_boost == 0:
+        return ChoiceAvailability.GUARANTEED
+    if estimated <= limits.safe_bytes and risk_boost >= 3:
+        return ChoiceAvailability.RISKY
+
+    # Between safe and hard => risky.
+    return ChoiceAvailability.RISKY
+
+
+def _mark(av: ChoiceAvailability) -> str:
+    if av == ChoiceAvailability.GUARANTEED:
+        return "✅"
+    if av == ChoiceAvailability.RISKY:
+        return "⚠️"
+    return "❌"
+
+
+def build_label(*, height: int, fps_int: int, vcodec: VideoCodec, container: Container, availability: ChoiceAvailability) -> str:
     fps_part = f"{fps_int}fps" if fps_int > 0 else "fps?"
-    return f"{height}p • {fps_part} • {vcodec.value} • {container.value}"
-
-
-def _pair_score(video: RawExtractorFormat, audio: RawExtractorFormat) -> tuple[int, int, int]:
-    """
-    Higher is better. Used only for selecting best audio for a video choice.
-    """
-    height = video.height or 0
-    fps = _fps_int(video.fps)
-    abr = audio.abr_kbps or 0
-    return (height, fps, abr)
+    return f"{_mark(availability)} {height}p • {fps_part} • {vcodec.value} • {container.value}"
 
 
 def build_format_choices(
     *,
     platform_key: str,
     raw_formats: list[RawExtractorFormat],
+    tg_limits: TelegramLimits,
 ) -> list[FormatChoice]:
-    """
-    Convert raw extractor formats into final choices:
-      - always video+audio
-      - deduplicate by (height, fps, vcodec, chosen_container)
-      - pick best audio for a given video (by abr)
-    """
     videos = [f for f in raw_formats if f.is_video and not f.is_audio]
     audios = [f for f in raw_formats if f.is_audio and not f.is_video]
-
     if not videos or not audios:
         raise ValidationError("Не удалось найти корректные форматы (нужны видео и аудио).")
 
-    # Candidate pairs by video; choose best matching audio
-    candidates: list[tuple[RawExtractorFormat, RawExtractorFormat]] = []
-    for v in videos:
-        if (v.height or 0) <= 0:
-            continue
-        best_audio = max(audios, key=lambda a: (a.abr_kbps or 0))
-        candidates.append((v, best_audio))
+    best_audio = max(audios, key=lambda a: (a.abr_kbps or 0, a.filesize_bytes or 0))
+    acodec = best_audio.acodec
 
-    if not candidates:
-        raise ValidationError("Не удалось подобрать форматы с корректным разрешением.")
-
-    # Build choices, then dedup
     built: list[FormatChoice] = []
-    for v, a in candidates:
+    for v in videos:
         height = int(v.height or 0)
+        if height <= 0:
+            continue
+
         fps_int = _fps_int(v.fps)
-        vcodec = v.vcodec if v.vcodec != VideoCodec.UNKNOWN else VideoCodec.UNKNOWN
-        acodec = a.acodec if a.acodec != AudioCodec.UNKNOWN else AudioCodec.UNKNOWN
-
+        vcodec = v.vcodec
         container = choose_container(vcodec=vcodec, acodec=acodec)
-        choice_id = _stable_choice_id(platform_key, height, fps_int, vcodec, container)
-        label = build_label(height=height, fps_int=fps_int, vcodec=vcodec, container=container)
 
-        video_spec = VideoSpec(
-            fmt=StreamSpec(
-                extractor_format_id=v.extractor_format_id,
-                codec=vcodec,
-                bitrate_kbps=v.vbr_kbps,
-            ),
-            width=v.width,
-            height=v.height,
-            fps=v.fps,
-        )
-        audio_spec = AudioSpec(
-            fmt=StreamSpec(
-                extractor_format_id=a.extractor_format_id,
-                codec=acodec,
-                bitrate_kbps=a.abr_kbps,
-            ),
-            sample_rate_hz=None,
-        )
+        estimated = _estimate_total_bytes(v, best_audio)
+        boost = _risk_boost(height=height, fps_int=fps_int, vcodec=vcodec, container=container)
+        availability = _availability(estimated=estimated, limits=tg_limits, risk_boost=boost)
+
+        choice_id = _stable_choice_id(platform_key, height, fps_int, vcodec, container)
+        label = build_label(height=height, fps_int=fps_int, vcodec=vcodec, container=container, availability=availability)
 
         built.append(
             FormatChoice(
                 choice_id=choice_id,
                 label=label,
                 container=container,
-                video=video_spec,
-                audio=audio_spec,
+                availability=availability,
+                video=VideoSpec(
+                    fmt=StreamSpec(v.extractor_format_id, vcodec, v.vbr_kbps),
+                    width=v.width,
+                    height=v.height,
+                    fps=v.fps,
+                ),
+                audio=AudioSpec(
+                    fmt=StreamSpec(best_audio.extractor_format_id, acodec, best_audio.abr_kbps),
+                    sample_rate_hz=None,
+                ),
                 height=height,
                 fps_int=fps_int,
                 vcodec=vcodec,
+                estimated_bytes=estimated,
             )
         )
+
+    if not built:
+        raise ValidationError("Не удалось подобрать форматы.")
 
     return deduplicate_choices(built)
 
 
 def deduplicate_choices(choices: list[FormatChoice]) -> list[FormatChoice]:
-    """
-    Dedup policy:
-      key = (height, fps_int, vcodec, container)
-    Keep one choice per key (deterministic by choice_id).
-    """
     buckets: dict[tuple[int, int, str, str], FormatChoice] = {}
     for c in choices:
         key = (c.height, c.fps_int, c.vcodec.value, c.container.value)
         existing = buckets.get(key)
-        if existing is None or c.choice_id < existing.choice_id:
+        if existing is None:
+            buckets[key] = c
+            continue
+        # Prefer higher availability (GUARANTEED over RISKY over UNAVAILABLE).
+        rank_new = _availability_rank(c.availability)
+        rank_old = _availability_rank(existing.availability)
+        if rank_new < rank_old:
             buckets[key] = c
 
-    # Sort by quality: height desc, fps desc, then label
-    return sorted(
-        buckets.values(),
-        key=lambda c: (-c.height, -c.fps_int, c.label),
-    )
+    def sort_key(c: FormatChoice) -> tuple[int, int, int, str]:
+        # availability order: guaranteed, risky, unavailable
+        return (_availability_rank(c.availability), -c.height, -c.fps_int, c.label)
+
+    return sorted(buckets.values(), key=sort_key)
+
+
+def _availability_rank(av: ChoiceAvailability) -> int:
+    if av == ChoiceAvailability.GUARANTEED:
+        return 0
+    if av == ChoiceAvailability.RISKY:
+        return 1
+    return 2

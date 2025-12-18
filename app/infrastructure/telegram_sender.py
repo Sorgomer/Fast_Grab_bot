@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import asyncio
@@ -16,12 +17,16 @@ class TelegramSenderError(RuntimeError):
 class TelegramSender:
     """
     Sends messages and files to Telegram.
-    Owns retry policy (limited) and file-size checks.
+
+    Strategy:
+      - small files: try send_video for UX, fallback to send_document if Telegram rejects
+      - big files: send_document only (send_video is stricter)
     """
 
-    def __init__(self, *, bot: Bot, max_file_mb: int) -> None:
+    def __init__(self, *, bot: Bot, hard_limit_mb: int, document_only_from_mb: int) -> None:
         self._bot = bot
-        self._max_bytes = max_file_mb * 1024 * 1024
+        self._hard_bytes = hard_limit_mb * 1024 * 1024
+        self._document_only_from_bytes = document_only_from_mb * 1024 * 1024
         self._logger = logging.getLogger("telegram_sender")
 
     async def send_status(self, chat_id: int, text: str) -> int:
@@ -31,25 +36,49 @@ class TelegramSender:
     async def edit_status(self, chat_id: int, message_id: int, text: str) -> None:
         await self._bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text)
 
-    async def send_video_file(self, chat_id: int, file_path: Path) -> None:
+    async def send_media_best_effort(self, chat_id: int, file_path: Path) -> None:
+        if not file_path.exists():
+            raise TelegramSenderError("Файл не найден перед отправкой.")
         size = file_path.stat().st_size
-        if size > self._max_bytes:
-            raise TelegramSenderError("Файл слишком большой для отправки в Telegram.")
+        if size <= 0:
+            raise TelegramSenderError("Файл пустой.")
+        if size > self._hard_bytes:
+            raise TelegramSenderError("Файл превышает лимит Telegram для ботов (≈2ГБ).")
 
         input_file = FSInputFile(path=str(file_path), filename=file_path.name)
 
-        # minimal retry for network
+        if size >= self._document_only_from_bytes:
+            await self._send_document_with_retry(chat_id, input_file)
+            return
+
+        # Try send_video first, fallback to document on strict validation failures.
+        try:
+            await self._send_video_with_retry(chat_id, input_file)
+        except TelegramSenderError:
+            await self._send_document_with_retry(chat_id, input_file)
+
+    async def _send_video_with_retry(self, chat_id: int, input_file: FSInputFile) -> None:
         last_exc: Exception | None = None
         for attempt in range(3):
             try:
                 await self._bot.send_video(chat_id=chat_id, video=input_file)
-                await asyncio.sleep(0)
                 return
             except TelegramNetworkError as exc:
                 last_exc = exc
                 await asyncio.sleep(1 + attempt)
             except TelegramBadRequest as exc:
-                # not retryable usually
-                raise TelegramSenderError("Telegram отклонил файл.") from exc
+                raise TelegramSenderError("Telegram отклонил видео.") from exc
+        raise TelegramSenderError("Не удалось отправить видео (ошибка сети).") from last_exc
 
-        raise TelegramSenderError("Не удалось отправить файл (ошибка сети).") from last_exc
+    async def _send_document_with_retry(self, chat_id: int, input_file: FSInputFile) -> None:
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                await self._bot.send_document(chat_id=chat_id, document=input_file)
+                return
+            except TelegramNetworkError as exc:
+                last_exc = exc
+                await asyncio.sleep(1 + attempt)
+            except TelegramBadRequest as exc:
+                raise TelegramSenderError("Telegram отклонил документ.") from exc
+        raise TelegramSenderError("Не удалось отправить документ (ошибка сети).") from last_exc

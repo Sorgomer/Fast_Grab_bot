@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -31,6 +32,12 @@ class AudioCodec(str, Enum):
     UNKNOWN = "unknown"
 
 
+class ChoiceAvailability(str, Enum):
+    GUARANTEED = "guaranteed"   # safe zone
+    RISKY = "risky"             # might fail through Telegram
+    UNAVAILABLE = "unavailable" # exceeds hard limit
+
+
 class JobStage(str, Enum):
     QUEUED = "queued"
     ANALYZING = "analyzing"
@@ -50,10 +57,6 @@ ChatId = NewType("ChatId", int)
 
 @dataclass(frozen=True, slots=True)
 class StreamSpec:
-    """
-    Stream spec refers to an internal platform/extractor format id.
-    This is NOT shown to the user.
-    """
     extractor_format_id: str
     codec: VideoCodec | AudioCodec
     bitrate_kbps: int | None
@@ -76,24 +79,26 @@ class AudioSpec:
 @dataclass(frozen=True, slots=True)
 class FormatChoice:
     """
-    Domain object for ONE UI BUTTON = ONE final file.
+    One UI button == one final file (video+audio merged into a container).
 
-    It always represents:
-      - a video stream AND an audio stream
-      - an intended output container (mp4/mkv)
-      - stable, deduplicated identity for callbacks/UI
+    estimated_bytes:
+      Best-effort estimate (may be None when extractor doesn't provide size).
+      Used only for UX and pre-validation. Not a guarantee.
     """
-    choice_id: str  # stable id we generate (not yt-dlp id)
-    label: str      # ready-to-show text (no markdown required)
+    choice_id: str
+    label: str
+
     container: Container
+    availability: ChoiceAvailability
 
     video: VideoSpec
     audio: AudioSpec
 
-    # For dedup/UI grouping
     height: int
     fps_int: int
     vcodec: VideoCodec
+
+    estimated_bytes: int | None = None
 
     @property
     def ext(self) -> str:
@@ -112,6 +117,5 @@ class Job:
     choice: FormatChoice
     stage: JobStage
 
-    # Optional, for progress/UI
     status_message_id: int | None = None
     error_user_message: str | None = None

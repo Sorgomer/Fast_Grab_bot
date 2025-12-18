@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,15 +9,17 @@ from aiogram import Bot
 
 from .config import Settings
 from .constants import APP_NAME
+from .domain.policies import TelegramLimits
+from .infrastructure.active_jobs import ActiveJobsRegistry
 from .infrastructure.rate_limiter import RateLimiter
 from .infrastructure.session_store import SessionStore
 from .infrastructure.temp_storage import TempStorage
+from .infrastructure.telegram_sender import TelegramSender
 from .infrastructure.yt import YdlClient, YdlConfig
 from .infrastructure.ffmpeg import FfmpegMerger, FfprobeClient
 from .infrastructure.platform_detector import PlatformDetector
 from .infrastructure.platforms import PlatformRegistry, YouTubeAdapter, VkAdapter
 from .infrastructure.download_queue import DownloadQueue
-from .infrastructure.telegram_sender import TelegramSender
 from .application.services import DownloadService
 from .application.use_cases.parse_link import ParseLinkUseCase
 from .application.use_cases.get_formats import GetFormatsUseCase
@@ -35,7 +38,6 @@ class AsyncStartStop(Protocol):
     async def stop(self) -> None: ...
 
 
-# Ports for presentation (so presentation DOES NOT import infrastructure)
 class RateLimiterPort(Protocol):
     def allow(self, user_id: int) -> bool: ...
 
@@ -53,8 +55,6 @@ class Container:
         return cls(settings=settings, logger=logger, _components={})
 
     def register(self, name: str, component: Any) -> None:
-        if not name or not name.strip():
-            raise DIError("Component name must be non-empty")
         if name in self._components:
             raise DIError(f"Component already registered: {name}")
         self._components[name] = component
@@ -70,40 +70,46 @@ class Container:
 
 
 def build_graph(container: Container) -> None:
-    """
-    Build the whole dependency graph.
-    Any init error must crash at startup.
-    """
-
     s = container.settings
 
-    # Core singletons
+    tg_limits = TelegramLimits(
+        hard_bytes=s.tg_hard_limit_mb * 1024 * 1024,
+        safe_bytes=s.tg_safe_limit_mb * 1024 * 1024,
+        risky_bytes=s.tg_risky_limit_mb * 1024 * 1024,
+        best_effort_from_bytes=s.tg_best_effort_from_mb * 1024 * 1024,
+    )
+
     session_store = SessionStore()
     rate_limiter: RateLimiterPort = RateLimiter(limit=s.rate_limit_per_user, window_sec=s.rate_limit_window_sec)
+    active_jobs = ActiveJobsRegistry(max_active_per_user=s.max_active_jobs_per_user)
+
     temp_storage = TempStorage(root=s.temp_root)
 
-    # Media
     ydl = YdlClient(cfg=YdlConfig())
     ffmpeg = FfmpegMerger()
     ffprobe = FfprobeClient()
 
-    # Platforms
     detector = PlatformDetector()
-    yt_adapter = YouTubeAdapter(ydl=ydl)
-    vk_adapter = VkAdapter(ydl=ydl)
+    yt_adapter = YouTubeAdapter(ydl=ydl, tg_limits=tg_limits)
+    vk_adapter = VkAdapter(ydl=ydl, tg_limits=tg_limits)
     registry = PlatformRegistry(youtube=yt_adapter, vk=vk_adapter)
 
-    # Bot / sender
     bot = Bot(token=s.bot_token)
-    sender = TelegramSender(bot=bot, max_file_mb=s.telegram_max_file_mb)
 
-    # Download handler wiring (queue -> handler)
+    sender = TelegramSender(
+        bot=bot,
+        hard_limit_mb=s.tg_hard_limit_mb,
+        document_only_from_mb=s.tg_document_only_from_mb,
+    )
+
     downloads = DownloadService(
         temp_storage=temp_storage,
         ydl=ydl,
         ffmpeg=ffmpeg,
         ffprobe=ffprobe,
         telegram_sender=sender,
+        active_jobs=active_jobs,
+        tg_hard_limit_bytes=tg_limits.hard_bytes,
     )
 
     queue = DownloadQueue(
@@ -112,20 +118,19 @@ def build_graph(container: Container) -> None:
         handler=downloads.handle_job,
     )
 
-    # Use cases
     parse_link = ParseLinkUseCase(detector=detector)
     get_formats = GetFormatsUseCase(registry=registry, sessions=session_store)
-    enqueue = EnqueueDownloadUseCase(sessions=session_store, queue=queue, downloads=downloads)
+    enqueue = EnqueueDownloadUseCase(sessions=session_store, queue=queue, downloads=downloads, active_jobs=active_jobs)
     cancel = CancelDownloadUseCase(downloads=downloads)
     retry = RetryDownloadUseCase()
 
-    # Register (order does not matter, lifecycle start order will be applied by lifecycle)
     container.register("bot", bot)
     container.register("telegram_sender", sender)
 
     container.register("session_store", session_store)
     container.register("rate_limiter", rate_limiter)
     container.register("temp_storage", temp_storage)
+    container.register("active_jobs", active_jobs)
 
     container.register("download_service", downloads)
     container.register("download_queue", queue)

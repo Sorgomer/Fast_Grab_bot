@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import asyncio
@@ -17,11 +18,12 @@ class ProbeResult:
     has_audio: bool
     duration_sec: float | None
     size_bytes: int
+    format_name: str | None
 
 
 class FfprobeClient:
     """
-    ffprobe wrapper for strict validation before sending to user.
+    Async wrapper around ffprobe.
     """
 
     async def probe(self, file_path: Path) -> ProbeResult:
@@ -29,42 +31,38 @@ class FfprobeClient:
 
     def _probe_sync(self, file_path: Path) -> ProbeResult:
         if not file_path.exists():
-            raise FfprobeError("file not found")
+            raise FfprobeError("file does not exist")
 
         cmd = [
             "ffprobe",
             "-v", "error",
-            "-show_streams",
             "-show_format",
+            "-show_streams",
             "-print_format", "json",
             str(file_path),
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode != 0:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
             raise FfprobeError("ffprobe failed")
 
         try:
-            data = json.loads(proc.stdout)
+            data = json.loads(result.stdout)
         except Exception as exc:
-            raise FfprobeError("ffprobe returned invalid json") from exc
+            raise FfprobeError("ffprobe output parse failed") from exc
 
         streams = data.get("streams")
-        fmt = data.get("format")
+        if not isinstance(streams, list):
+            raise FfprobeError("ffprobe did not return streams")
 
-        has_video = False
-        has_audio = False
-        if isinstance(streams, list):
-            for s in streams:
-                if not isinstance(s, dict):
-                    continue
-                stype = s.get("codec_type")
-                if stype == "video":
-                    has_video = True
-                elif stype == "audio":
-                    has_audio = True
+        has_video = any(isinstance(s, dict) and s.get("codec_type") == "video" for s in streams)
+        has_audio = any(isinstance(s, dict) and s.get("codec_type") == "audio" for s in streams)
 
         duration_sec: float | None = None
+        format_name: str | None = None
+        fmt = data.get("format")
         if isinstance(fmt, dict):
+            if isinstance(fmt.get("format_name"), str):
+                format_name = fmt.get("format_name")
             d = fmt.get("duration")
             try:
                 if d is not None:
@@ -78,4 +76,5 @@ class FfprobeClient:
             has_audio=has_audio,
             duration_sec=duration_sec,
             size_bytes=size,
+            format_name=format_name,
         )

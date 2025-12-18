@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,9 +13,18 @@ class UserSession:
     platform_key: str
     version: int
     choices: Dict[str, FormatChoice]
+    warned_risky_once: bool
 
 
 class SessionStore:
+    """
+    In-memory user/session context.
+
+    Responsibility:
+      - store extracted choices for a user for a short-lived session
+      - keep a "warned once" flag for risky format selection UX
+    """
+
     def __init__(self) -> None:
         self._sessions: Dict[int, UserSession] = {}
 
@@ -25,6 +35,7 @@ class SessionStore:
             platform_key=platform_key,
             version=version,
             choices={c.choice_id: c for c in choices},
+            warned_risky_once=False,
         )
         return version
 
@@ -39,6 +50,18 @@ class SessionStore:
         if session is None or session.version != version:
             raise KeyError("session expired")
         return session.url, session.platform_key
+
+    def warned_risky_once(self, *, user_id: int, version: int) -> bool:
+        session = self._sessions.get(user_id)
+        if session is None or session.version != version:
+            raise KeyError("session expired")
+        return session.warned_risky_once
+
+    def mark_warned_risky_once(self, *, user_id: int, version: int) -> None:
+        session = self._sessions.get(user_id)
+        if session is None or session.version != version:
+            raise KeyError("session expired")
+        session.warned_risky_once = True
 
     def clear(self, *, user_id: int) -> None:
         self._sessions.pop(user_id, None)
