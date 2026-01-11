@@ -12,6 +12,7 @@ class YdlConfig:
 
     # Networking / robustness
     socket_timeout_sec: int = 30
+    extract_timeout_sec: int = 15
     retries: int = 3
 
     # Behavior

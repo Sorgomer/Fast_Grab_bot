@@ -7,10 +7,6 @@ from app.infrastructure.yt import YdlClient
 
 
 class VkAdapter:
-    """
-    VK platform adapter.
-    """
-
     def __init__(self, *, ydl: YdlClient, tg_limits: TelegramLimits) -> None:
         self._ydl = ydl
         self._tg_limits = tg_limits

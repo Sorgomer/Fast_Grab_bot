@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+import logging
+logger = logging.getLogger(__name__)
+
 from app.domain.models import Platform
 from app.domain.errors import UnsupportedPlatformError
 
@@ -13,10 +16,15 @@ class PlatformDetector:
     """
 
     def detect(self, url: str) -> Platform:
+        logger.info("[DETECTOR] raw url=%s", url)
+
         parsed = urlparse(url)
         host = (parsed.netloc or "").lower()
+        logger.info("[DETECTOR] parsed host before normalize=%s", host)
+
 
         if not host:
+            logger.warning("[DETECTOR] empty host")
             raise UnsupportedPlatformError("Не удалось определить платформу.")
 
         if host.startswith("www."):
@@ -24,10 +32,18 @@ class PlatformDetector:
         if host.startswith("m."):
             host = host[2:]
 
-        if "youtube.com" in host or "youtu.be" in host:
+        logger.info("[DETECTOR] normalized host=%s", host)
+
+        if host in {"youtube.com", "youtu.be"}:
+            logger.info("[DETECTOR] detected YOUTUBE")
             return Platform.YOUTUBE
 
-        if host.endswith("vk.com") or host.endswith("vk.ru") or host.endswith("vkvideo.ru") or host.endswith("vkvideo.com"):
+        if host in {"vk.com", "vk.ru", "vkvideo.ru"}:
+            logger.info("[DETECTOR] detected VK")
             return Platform.VK
 
-        raise UnsupportedPlatformError("Поддерживаются только YouTube и VK Video.")
+        if host == "rutube.ru":
+            logger.info("[DETECTOR] detected RUTUBE")
+            return Platform.RUTUBE
+        logger.error("[DETECTOR] unsupported host=%s", host)
+        raise UnsupportedPlatformError("Эта платформа пока не поддерживается")

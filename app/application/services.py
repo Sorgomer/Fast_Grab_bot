@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -66,24 +65,42 @@ class DownloadService:
 
             workdir = self._temp.allocate(str(job.job_id))
 
-            await self._sender.edit_status(chat_id, status_id, "Скачивание (видео + аудио)…")
-            v_file = await self._ydl.download_stream(
-                url=job.url,
-                extractor_format_id=job.choice.video.fmt.extractor_format_id,
-                out_path=workdir / "video.stream",
-            )
-            if cancel_event.is_set():
-                await self._sender.edit_status(chat_id, status_id, "Отменено.")
-                return
+            video_fmt_id = job.choice.video.fmt.extractor_format_id
+            audio_fmt_id = job.choice.audio.fmt.extractor_format_id
 
-            a_file = await self._ydl.download_stream(
-                url=job.url,
-                extractor_format_id=job.choice.audio.fmt.extractor_format_id,
-                out_path=workdir / "audio.stream",
-            )
-            if cancel_event.is_set():
-                await self._sender.edit_status(chat_id, status_id, "Отменено.")
-                return
+            if video_fmt_id == audio_fmt_id:
+                # Muxed/progressive stream (video+audio in a single file). Common for RuTube.
+                await self._sender.edit_status(chat_id, status_id, "Скачивание (видео + аудио)…")
+                muxed_file = await self._ydl.download_stream(
+                    url=job.url,
+                    extractor_format_id=video_fmt_id,
+                    out_path=workdir / "muxed.stream",
+                )
+                if cancel_event.is_set():
+                    await self._sender.edit_status(chat_id, status_id, "Отменено.")
+                    return
+
+                v_file = muxed_file
+                a_file = muxed_file
+            else:
+                await self._sender.edit_status(chat_id, status_id, "Скачивание (видео + аудио)…")
+                v_file = await self._ydl.download_stream(
+                    url=job.url,
+                    extractor_format_id=video_fmt_id,
+                    out_path=workdir / "video.stream",
+                )
+                if cancel_event.is_set():
+                    await self._sender.edit_status(chat_id, status_id, "Отменено.")
+                    return
+
+                a_file = await self._ydl.download_stream(
+                    url=job.url,
+                    extractor_format_id=audio_fmt_id,
+                    out_path=workdir / "audio.stream",
+                )
+                if cancel_event.is_set():
+                    await self._sender.edit_status(chat_id, status_id, "Отменено.")
+                    return
 
             await self._sender.edit_status(chat_id, status_id, "Склейка ffmpeg…")
             out_path = workdir / f"output.{job.choice.ext}"

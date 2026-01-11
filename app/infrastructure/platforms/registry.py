@@ -10,10 +10,16 @@ class PlatformRegistry:
     Maps Platform -> Adapter.
     """
 
-    def __init__(self, *, youtube: AbstractPlatformAdapter, vk: AbstractPlatformAdapter) -> None:
+    def __init__(self, 
+                 *, 
+                 youtube: AbstractPlatformAdapter, 
+                 vk: AbstractPlatformAdapter, 
+                 rutube: AbstractPlatformAdapter
+    ) -> None:
         self._adapters = {
             Platform.YOUTUBE: youtube,
             Platform.VK: vk,
+            Platform.RUTUBE: rutube,
         }
 
     def get(self, platform: Platform) -> AbstractPlatformAdapter:

@@ -88,6 +88,6 @@ class EnqueueDownloadUseCase:
         if warned:
             return EnqueueResultDTO(
                 accepted=True,
-                message="⚠️ Формат в зоне риска (может не пройти через Telegram). Запускаю best-effort…",
+                message="⚠️ Формат в зоне риска - сделаю все что в моих силах",
             )
         return EnqueueResultDTO(accepted=True, message="Принято. Начинаю.")

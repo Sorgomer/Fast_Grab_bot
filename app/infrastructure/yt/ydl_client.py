@@ -77,10 +77,20 @@ class YdlClient:
         self._cfg = cfg
         self._logger = logging.getLogger("ydl")
 
-    async def extract(self, url: str) -> ExtractResult:
-        return await asyncio.to_thread(self._extract_sync, url)
+    async def extract(self, url: str, *, extra_opts: dict[str, Any] | None = None) -> ExtractResult:
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._extract_sync, url, extra_opts),
+                timeout=self._cfg.extract_timeout_sec,
+            )
+        except asyncio.TimeoutError as exc:
+            raise YdlError("Extractor timed out while fetching media info") from exc
 
-    def _extract_sync(self, url: str) -> ExtractResult:
+    def _extract_sync(
+        self,
+        url: str,
+        extra_opts: dict[str, Any] | None = None,
+    ) -> ExtractResult:
         try:
             import yt_dlp  # type: ignore
         except Exception as exc:
@@ -96,6 +106,9 @@ class YdlClient:
             "skip_download": True,
         }
 
+        if extra_opts:
+            ydl_opts.update(extra_opts)
+        
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -131,6 +144,7 @@ class YdlClient:
             # We want *pure* streams for pairing: video-only and audio-only.
             is_video_only = has_video and not has_audio
             is_audio_only = has_audio and not has_video
+            is_muxed = has_video and has_audio
 
             width = f.get("width")
             height = f.get("height")
@@ -146,15 +160,15 @@ class YdlClient:
             raw_formats.append(
                 RawExtractorFormat(
                     extractor_format_id=fmt_id,
-                    is_video=is_video_only,
-                    is_audio=is_audio_only,
+                    is_video=is_video_only or is_muxed,
+                    is_audio=is_audio_only or is_muxed,
                     width=int(width) if isinstance(width, (int, float)) else None,
                     height=int(height) if isinstance(height, (int, float)) else None,
                     fps=float(fps) if isinstance(fps, (int, float)) else None,
                     vcodec=_map_vcodec(vcodec if isinstance(vcodec, str) else None),
                     acodec=_map_acodec(acodec if isinstance(acodec, str) else None),
-                    vbr_kbps=vbr if is_video_only else None,
-                    abr_kbps=abr if is_audio_only else None,
+                    vbr_kbps=vbr if (is_video_only or is_muxed) else None,
+                    abr_kbps=abr if (is_audio_only or is_muxed) else None,
                     ext=ext if isinstance(ext, str) else None,
                     filesize_bytes=int(filesize) if isinstance(filesize, (int, float)) else None,
                 )
@@ -166,7 +180,7 @@ class YdlClient:
         # Keep only meaningful formats
         raw_formats = [rf for rf in raw_formats if rf.is_video or rf.is_audio]
         if not raw_formats:
-            raise YdlError("No usable audio/video-only formats found")
+            raise YdlError("No usable formats found")
 
         return ExtractResult(title=title, raw_formats=raw_formats, webpage_url=webpage_url)
 

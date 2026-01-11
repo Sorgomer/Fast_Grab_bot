@@ -9,6 +9,7 @@ from typing import NewType
 class Platform(str, Enum):
     YOUTUBE = "youtube"
     VK = "vk"
+    RUTUBE = "rutube"
 
 
 class Container(str, Enum):

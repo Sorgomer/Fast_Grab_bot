@@ -28,8 +28,11 @@ async def link_handler(
         await message.answer(exc.user_message)
         return
     except Exception:
-        await message.answer("Не удалось обработать ссылку.")
+        await message.answer("Не удалось обработать ссылку " \
+        "Попробуй ещё раз")
         return
 
     kb = formats_keyboard(choices=dto.choices, version=dto.session_version)
-    await message.answer("Выбери формат:", reply_markup=kb)
+    await message.answer("Выбери формат:\n" \
+    "✅ - Рекомендовано\n" \
+    "⚠️ - Telegram может не пропустить этот формат", reply_markup=kb)

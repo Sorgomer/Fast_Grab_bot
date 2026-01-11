@@ -18,7 +18,7 @@ from .infrastructure.telegram_sender import TelegramSender
 from .infrastructure.yt import YdlClient, YdlConfig
 from .infrastructure.ffmpeg import FfmpegMerger, FfprobeClient
 from .infrastructure.platform_detector import PlatformDetector
-from .infrastructure.platforms import PlatformRegistry, YouTubeAdapter, VkAdapter
+from .infrastructure.platforms import PlatformRegistry, YouTubeAdapter, VkAdapter, RutubeAdapter
 from .infrastructure.download_queue import DownloadQueue
 from .application.services import DownloadService
 from .application.use_cases.parse_link import ParseLinkUseCase
@@ -92,7 +92,8 @@ def build_graph(container: Container) -> None:
     detector = PlatformDetector()
     yt_adapter = YouTubeAdapter(ydl=ydl, tg_limits=tg_limits)
     vk_adapter = VkAdapter(ydl=ydl, tg_limits=tg_limits)
-    registry = PlatformRegistry(youtube=yt_adapter, vk=vk_adapter)
+    rutube_adapter = RutubeAdapter(ydl=ydl, tg_limits=tg_limits)
+    registry = PlatformRegistry(youtube=yt_adapter, vk=vk_adapter, rutube=rutube_adapter)
 
     bot = Bot(token=s.bot_token)
 

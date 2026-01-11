@@ -122,10 +122,36 @@ def _mark(av: ChoiceAvailability) -> str:
     return "❌"
 
 
-def build_label(*, height: int, fps_int: int, vcodec: VideoCodec, container: Container, availability: ChoiceAvailability) -> str:
-    fps_part = f"{fps_int}fps" if fps_int > 0 else "fps?"
-    return f"{_mark(availability)} {height}p • {fps_part} • {vcodec.value} • {container.value}"
+def build_label(*, height: int, availability: ChoiceAvailability) -> str:
+    return f"{_mark(availability)} {height}p"
 
+
+def _choice_rank(c: FormatChoice) -> tuple[int, int, int, int, int]:
+    """
+    Чем МЕНЬШЕ tuple — тем формат ЛУЧШЕ.
+    """
+    availability_rank = _availability_rank(c.availability)
+
+    container_rank = 0 if c.container == Container.MP4 else 1
+
+    codec_rank = {
+        VideoCodec.H264: 0,
+        VideoCodec.H265: 1,
+        VideoCodec.VP9: 2,
+        VideoCodec.AV1: 3,
+    }.get(c.vcodec, 9)
+
+    fps_rank = -c.fps_int
+
+    size_rank = c.estimated_bytes if c.estimated_bytes is not None else 10**18
+
+    return (
+        availability_rank,
+        container_rank,
+        codec_rank,
+        fps_rank,
+        size_rank,
+    )
 
 def build_format_choices(
     *,
@@ -135,6 +161,57 @@ def build_format_choices(
 ) -> list[FormatChoice]:
     videos = [f for f in raw_formats if f.is_video and not f.is_audio]
     audios = [f for f in raw_formats if f.is_audio and not f.is_video]
+    muxed = [f for f in raw_formats if f.is_video and f.is_audio]
+
+    # If extractor provides muxed (progressive) formats (common on RuTube),
+    # fall back to muxed choices when we cannot form video-only + audio-only pairs.
+    if muxed and (not videos or not audios):
+        built: list[FormatChoice] = []
+        for m in muxed:
+            height = int(m.height or 0)
+            if height <= 0:
+                continue
+
+            fps_int = _fps_int(m.fps)
+            vcodec = m.vcodec
+            acodec = m.acodec
+            container = choose_container(vcodec=vcodec, acodec=acodec)
+
+            estimated = int(m.filesize_bytes * 1.01) if m.filesize_bytes is not None else None
+            boost = _risk_boost(height=height, fps_int=fps_int, vcodec=vcodec, container=container)
+            availability = _availability(estimated=estimated, limits=tg_limits, risk_boost=boost)
+
+            choice_id = _stable_choice_id(platform_key, height, fps_int, vcodec, container)
+            label = build_label(height=height, availability=availability)
+
+            built.append(
+                FormatChoice(
+                    choice_id=choice_id,
+                    label=label,
+                    container=container,
+                    availability=availability,
+                    video=VideoSpec(
+                        fmt=StreamSpec(m.extractor_format_id, vcodec, m.vbr_kbps),
+                        width=m.width,
+                        height=m.height,
+                        fps=m.fps,
+                    ),
+                    audio=AudioSpec(
+                        fmt=StreamSpec(m.extractor_format_id, acodec, m.abr_kbps),
+                        sample_rate_hz=None,
+                    ),
+                    height=height,
+                    fps_int=fps_int,
+                    vcodec=vcodec,
+                    estimated_bytes=estimated,
+                )
+            )
+
+        if not built:
+            raise ValidationError("Не удалось подобрать форматы.")
+
+        return deduplicate_choices(built)
+
     if not videos or not audios:
         raise ValidationError("Не удалось найти корректные форматы (нужны видео и аудио).")
 
@@ -156,7 +233,7 @@ def build_format_choices(
         availability = _availability(estimated=estimated, limits=tg_limits, risk_boost=boost)
 
         choice_id = _stable_choice_id(platform_key, height, fps_int, vcodec, container)
-        label = build_label(height=height, fps_int=fps_int, vcodec=vcodec, container=container, availability=availability)
+        label = build_label(height=height, availability=availability)
 
         built.append(
             FormatChoice(
@@ -188,24 +265,43 @@ def build_format_choices(
 
 
 def deduplicate_choices(choices: list[FormatChoice]) -> list[FormatChoice]:
-    buckets: dict[tuple[int, int, str, str], FormatChoice] = {}
+    """
+    1 height = 1 button (best format).
+    """
+    best_by_height: dict[int, FormatChoice] = {}
+
     for c in choices:
-        key = (c.height, c.fps_int, c.vcodec.value, c.container.value)
-        existing = buckets.get(key)
-        if existing is None:
-            buckets[key] = c
-            continue
-        # Prefer higher availability (GUARANTEED over RISKY over UNAVAILABLE).
-        rank_new = _availability_rank(c.availability)
-        rank_old = _availability_rank(existing.availability)
-        if rank_new < rank_old:
-            buckets[key] = c
+        cur = best_by_height.get(c.height)
+        if cur is None or _choice_rank(c) < _choice_rank(cur):
+            best_by_height[c.height] = c
 
-    def sort_key(c: FormatChoice) -> tuple[int, int, int, str]:
-        # availability order: guaranteed, risky, unavailable
-        return (_availability_rank(c.availability), -c.height, -c.fps_int, c.label)
+    # пере-лейблим после выбора победителя
+    final: list[FormatChoice] = []
 
-    return sorted(buckets.values(), key=sort_key)
+    for c in best_by_height.values():
+        if c.availability == ChoiceAvailability.UNAVAILABLE:
+            continue  # ❌ не показываем вообще
+
+        final.append(
+            FormatChoice(
+                choice_id=c.choice_id,
+                label=build_label(height=c.height, availability=c.availability),
+                container=c.container,
+                availability=c.availability,
+                video=c.video,
+                audio=c.audio,
+                height=c.height,
+                fps_int=c.fps_int,
+                vcodec=c.vcodec,
+                estimated_bytes=c.estimated_bytes,
+            )
+        )
+
+    # сортировка для UI
+    return sorted(
+    final,
+    key=lambda c: -c.height,
+    )
 
 
 def _availability_rank(av: ChoiceAvailability) -> int:
