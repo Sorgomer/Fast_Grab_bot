@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
@@ -10,5 +10,11 @@ router = Router()
 @router.message(Command("start", "help"))
 async def start_handler(message: Message) -> None:
     await message.answer(
-        "Пришли ссылку на видео YouTube или VK — я покажу доступные форматы."
+        "⛏️👷Я готов спуститься в шахту интернета.\nСкинь ссылку — добуду видео."
+    )
+
+
+@router.message(F.text.startswith("/") & ~Command("start") & ~Command("help"))
+async def unknown_command_handler(message: Message) -> None:
+    await message.answer("⚒️ Здесь добывают только видео.\n\nПришли ссылку (http:// или https://)\n\nили загляни в /help."
     )

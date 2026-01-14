@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.types import Message
 
 from app.application.use_cases.parse_link import ParseLinkUseCase
@@ -18,8 +18,10 @@ from app.presentation.keyboards.formats import formats_keyboard
 
 router = Router()
 
+_URL_RE = r"^https?://\S+$"
 
-@router.message()
+
+@router.message(F.text.regexp(_URL_RE) & ~F.text.startswith("/"))
 async def link_handler(
     message: Message,
     parse_link: ParseLinkUseCase,
@@ -38,12 +40,12 @@ async def link_handler(
             platform=parsed.platform,
         )
     except DomainError as exc:
-        # map common domain messages into mine-style text
-        text = exc.user_message
-        if "не вижу" in text.lower():
-            await status_animator.fail(handle, text=UX_MINE_BAD_LINK)
-        elif "не поддерж" in text.lower():
+        text = getattr(exc, "user_message", None) or str(exc)
+        low = text.lower()
+        if "не поддерж" in low:
             await status_animator.fail(handle, text=UX_MINE_UNSUPPORTED)
+        elif "ссылка" in low or "http://" in low or "https://" in low:
+            await status_animator.fail(handle, text=UX_MINE_BAD_LINK)
         else:
             await status_animator.fail(handle, text=text)
         return
@@ -54,6 +56,16 @@ async def link_handler(
     kb = formats_keyboard(choices=dto.choices, version=dto.session_version)
     await status_animator.set_text(
         handle,
-        "Выбери качество:\n✅ - пройдёт почти всегда\n⚠️ - Telegram может не пропустить",
+        "Выбери качество:\n✅ - Пещера безопасна. Видео можно добыть\n⚠️ - Порода нестабильная. Результат не гарантирован.",
         reply_markup=kb,
     )
+
+
+@router.message(~F.text)
+async def non_text_input_handler(message: Message) -> None:
+    await message.answer("⛏️👷Я готов спуститься в шахту интернета.\nСкинь ссылку — добуду видео.")
+
+
+@router.message(F.text & ~F.text.regexp(_URL_RE) & ~F.text.startswith("/"))
+async def invalid_text_input_handler(message: Message) -> None:
+    await message.answer("⛏️👷Я готов спуститься в шахту интернета.\nСкинь ссылку — добуду видео.")

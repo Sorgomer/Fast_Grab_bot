@@ -1,11 +1,7 @@
-from __future__ import annotations
-
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 def empty_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[])
-
 
 def single_button(text: str, callback_data: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
