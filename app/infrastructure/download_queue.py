@@ -41,10 +41,11 @@ class DownloadQueue:
         self._tasks.clear()
 
     async def enqueue(self, job: Job) -> asyncio.Event | None:
-        if self._queue.full():
-            return None
         cancel_event = asyncio.Event()
-        await self._queue.put(_QueueItem(job=job, cancel_event=cancel_event))
+        try:
+            self._queue.put_nowait(_QueueItem(job=job, cancel_event=cancel_event))
+        except asyncio.QueueFull:
+            return None
         return cancel_event
 
     async def _worker(self, idx: int) -> None:
