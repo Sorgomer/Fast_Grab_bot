@@ -14,7 +14,7 @@ async def start_handler(message: Message) -> None:
     )
 
 
-@router.message(F.text.startswith("/") & ~Command("start") & ~Command("help"))
+@router.message(F.text.startswith("/") & ~F.text.regexp(r"^/(start|help)(?:@\w+)?(?:\s|$)"))
 async def unknown_command_handler(message: Message) -> None:
     await message.answer("⚒️ Здесь добывают только видео.\n\nПришли ссылку (http:// или https://)\n\nили загляни в /help."
     )
