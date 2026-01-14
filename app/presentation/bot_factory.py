@@ -14,7 +14,8 @@ from app.presentation.middlewares.logging import LoggingMiddleware
 def build_dispatcher_and_bot(container: Container) -> tuple[Bot, Dispatcher]:
     settings = container.settings
 
-    bot = Bot(token=settings.bot_token)
+    # Use the DI-managed bot instance to avoid multiple sessions.
+    bot: Bot = container.get("bot")
     dp = Dispatcher()
 
     # Middlewares
@@ -32,6 +33,7 @@ def build_dispatcher_and_bot(container: Container) -> tuple[Bot, Dispatcher]:
         parse_link=container.get("parse_link_uc"),
         get_formats=container.get("get_formats_uc"),
         enqueue=container.get("enqueue_download_uc"),
+        status_animator=container.get("status_animator"),
     )
 
     return bot, dp

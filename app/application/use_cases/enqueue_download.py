@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import uuid
@@ -40,6 +39,7 @@ class EnqueueDownloadUseCase:
         chat_id: int,
         session_version: int,
         choice_id: str,
+        status_message_id: int,
     ) -> EnqueueResultDTO:
         # per-user active limit (stability)
         if not self._active.try_acquire(user_id):
@@ -72,6 +72,7 @@ class EnqueueDownloadUseCase:
             job_id=JobId(uuid.uuid4().hex),
             user_id=UserId(user_id),
             chat_id=ChatId(chat_id),
+            status_message_id=status_message_id,
             platform=Platform(platform_key),
             url=url,
             choice=choice,
@@ -90,4 +91,4 @@ class EnqueueDownloadUseCase:
                 accepted=True,
                 message="⚠️ Формат в зоне риска - сделаю все что в моих силах",
             )
-        return EnqueueResultDTO(accepted=True, message="Принято. Начинаю.")
+        return EnqueueResultDTO(accepted=True, message="")

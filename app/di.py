@@ -8,13 +8,14 @@ from typing import Any, Protocol, runtime_checkable
 from aiogram import Bot
 
 from .config import Settings
-from .constants import APP_NAME
+from .constants import APP_NAME, UX_STATUS_MIN_EDIT_INTERVAL_SEC
 from .domain.policies import TelegramLimits
 from .infrastructure.active_jobs import ActiveJobsRegistry
 from .infrastructure.rate_limiter import RateLimiter
 from .infrastructure.session_store import SessionStore
 from .infrastructure.temp_storage import TempStorage
 from .infrastructure.telegram_sender import TelegramSender
+from .infrastructure.status_animator import StatusAnimator
 from .infrastructure.yt import YdlClient, YdlConfig
 from .infrastructure.ffmpeg import FfmpegMerger, FfprobeClient
 from .infrastructure.platform_detector import PlatformDetector
@@ -103,12 +104,15 @@ def build_graph(container: Container) -> None:
         document_only_from_mb=s.tg_document_only_from_mb,
     )
 
+    status_animator = StatusAnimator(sender=sender, min_edit_interval_sec=UX_STATUS_MIN_EDIT_INTERVAL_SEC)
+
     downloads = DownloadService(
         temp_storage=temp_storage,
         ydl=ydl,
         ffmpeg=ffmpeg,
         ffprobe=ffprobe,
         telegram_sender=sender,
+        status_animator=status_animator,
         active_jobs=active_jobs,
         tg_hard_limit_bytes=tg_limits.hard_bytes,
     )
@@ -127,6 +131,7 @@ def build_graph(container: Container) -> None:
 
     container.register("bot", bot)
     container.register("telegram_sender", sender)
+    container.register("status_animator", status_animator)
 
     container.register("session_store", session_store)
     container.register("rate_limiter", rate_limiter)
