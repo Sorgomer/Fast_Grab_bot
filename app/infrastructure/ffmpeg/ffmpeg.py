@@ -60,7 +60,19 @@ class FfmpegMerger:
 
         cmd += [str(inp.output_path)]
 
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        FFMPEG_TIMEOUT_SEC = 900
+        
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired as exc:
+            self._logger.error(
+                "ffmpeg timeout after %ss. cmd=%s stderr=%s",
+                FFMPEG_TIMEOUT_SEC,
+                " ".join(cmd),
+                ((exc.stderr or "").strip() if hasattr(exc, "stderr") else ""),
+            )
+            raise FfmpegError(f"ffmpeg timed out after {FFMPEG_TIMEOUT_SEC}s") from exc
+
         if proc.returncode != 0:
             self._logger.error("ffmpeg stderr: %s", (proc.stderr or "").strip())
             raise FfmpegError("ffmpeg merge failed")

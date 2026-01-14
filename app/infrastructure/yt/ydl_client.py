@@ -185,7 +185,19 @@ class YdlClient:
         return ExtractResult(title=title, raw_formats=raw_formats, webpage_url=webpage_url)
 
     async def download_stream(self, *, url: str, extractor_format_id: str, out_path: Path) -> Path:
-        return await asyncio.to_thread(self._download_stream_sync, url, extractor_format_id, out_path)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._download_stream_sync, url, extractor_format_id, out_path),
+                timeout=self._cfg.download_timeout_sec,
+            )
+        except asyncio.TimeoutError as exc:
+            self._logger.error(
+                "yt-dlp download timeout after %ss: url=%s format=%s out=%s",
+                self._cfg.download_timeout_sec, url, extractor_format_id, str(out_path),
+            )
+            raise YdlError(
+                f"Downloader timed out after {self._cfg.download_timeout_sec}s while downloading media stream"
+            ) from exc
 
     def _download_stream_sync(self, url: str, extractor_format_id: str, out_path: Path) -> Path:
         try:

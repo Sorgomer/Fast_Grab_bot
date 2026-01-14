@@ -41,7 +41,15 @@ class FfprobeClient:
             "-print_format", "json",
             str(file_path),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        FFPROBE_TIMEOUT_SEC = 20  # 20 секунд на probe
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFPROBE_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired as exc:
+            # stderr может быть полезен для диагностики
+            stderr = (exc.stderr or "").strip() if hasattr(exc, "stderr") else ""
+            raise FfprobeError(f"ffprobe timed out after {FFPROBE_TIMEOUT_SEC}s; stderr={stderr}") from exc
+
         if result.returncode != 0:
             raise FfprobeError("ffprobe failed")
 

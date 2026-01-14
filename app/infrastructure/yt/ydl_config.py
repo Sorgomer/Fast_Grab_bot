@@ -1,18 +1,12 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
 class YdlConfig:
-    """
-    Centralized yt-dlp config.
-    IMPORTANT: No postprocessors, no merge. Downloader/extractor only.
-    """
-
     # Networking / robustness
     socket_timeout_sec: int = 30
     extract_timeout_sec: int = 15
+    download_timeout_sec: int = 3600  # 60 минут на stream-download
     retries: int = 3
 
     # Behavior
