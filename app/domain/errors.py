@@ -20,3 +20,7 @@ class ValidationError(DomainError):
 @dataclass(frozen=True, slots=True)
 class UnsupportedPlatformError(DomainError):
     pass
+
+class JobCancelledError(Exception):
+    """Raised when a user cancels an in-flight or queued download job."""
+    pass
