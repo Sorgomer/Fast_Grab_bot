@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
+from asyncio.subprocess import PIPE, Process
+from app.domain.errors import JobCancelledError
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,10 +27,7 @@ class FfprobeClient:
     Async wrapper around ffprobe.
     """
 
-    async def probe(self, file_path: Path) -> ProbeResult:
-        return await asyncio.to_thread(self._probe_sync, file_path)
-
-    def _probe_sync(self, file_path: Path) -> ProbeResult:
+    async def probe(self, file_path: Path, *, cancel_event: asyncio.Event | None = None) -> ProbeResult:
         if not file_path.exists():
             raise FfprobeError("file does not exist")
 
@@ -41,20 +39,62 @@ class FfprobeClient:
             "-print_format", "json",
             str(file_path),
         ]
-        FFPROBE_TIMEOUT_SEC = 20  # 20 секунд на probe
+        FFPROBE_TIMEOUT_SEC = 20
+
+        proc = await asyncio.create_subprocess_exec(*cmd, stdout=PIPE, stderr=PIPE)
+
+        async def _terminate(p: Process) -> None:
+            if p.returncode is not None:
+                return
+            try:
+                p.terminate()
+            except ProcessLookupError:
+                return
+            try:
+                await asyncio.wait_for(p.wait(), timeout=2)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                p.kill()
+            except ProcessLookupError:
+                return
+            await p.wait()
+
+        comm_task = asyncio.create_task(proc.communicate())
+        cancel_task: asyncio.Task[None] | None = None
+        if cancel_event is not None:
+            cancel_task = asyncio.create_task(cancel_event.wait())
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFPROBE_TIMEOUT_SEC)
-        except subprocess.TimeoutExpired as exc:
-            # stderr может быть полезен для диагностики
-            stderr = (exc.stderr or "").strip() if hasattr(exc, "stderr") else ""
-            raise FfprobeError(f"ffprobe timed out after {FFPROBE_TIMEOUT_SEC}s; stderr={stderr}") from exc
+            wait_set: set[asyncio.Task[object]] = {comm_task}
+            if cancel_task is not None:
+                wait_set.add(cancel_task)  # type: ignore[arg-type]
 
-        if result.returncode != 0:
+            done, _ = await asyncio.wait(
+                wait_set,
+                timeout=FFPROBE_TIMEOUT_SEC,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if not done:
+                await _terminate(proc)
+                raise FfprobeError(f"ffprobe timed out after {FFPROBE_TIMEOUT_SEC}s")
+
+            if cancel_task is not None and cancel_task in done:
+                await _terminate(proc)
+                raise JobCancelledError()
+
+            stdout_b, _stderr_b = await comm_task
+        finally:
+            if cancel_task is not None:
+                cancel_task.cancel()
+
+        if proc.returncode != 0:
             raise FfprobeError("ffprobe failed")
 
         try:
-            data = json.loads(result.stdout)
+            data = json.loads((stdout_b or b"").decode(errors="ignore"))
         except Exception as exc:
             raise FfprobeError("ffprobe output parse failed") from exc
 

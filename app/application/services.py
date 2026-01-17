@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from app.domain.models import Job, JobId, Container
 from app.infrastructure.active_jobs import ActiveJobsRegistry
@@ -23,6 +23,7 @@ from app.constants import (
 from app.infrastructure.yt import YdlClient, YdlError
 from app.infrastructure.ffmpeg import FfmpegMerger, FfmpegError, FfprobeClient, FfprobeError
 from app.infrastructure.ffmpeg.ffmpeg import MergeInputs
+from app.domain.errors import JobCancelledError
 
 
 class DownloadService:
@@ -57,18 +58,48 @@ class DownloadService:
         self._tg_hard_limit_bytes = tg_hard_limit_bytes
         self._logger = logging.getLogger("download_service")
         self._cancel_tokens: Dict[JobId, asyncio.Event] = {}
+        self._active_job_by_user: Dict[int, JobId] = {}
 
-    def register_cancel_token(self, job_id: JobId, token: asyncio.Event) -> None:
+    def register_cancel_token(self, job_id: JobId, token: asyncio.Event, user_id: int | None = None) -> None:
+        # Backward compatible: some call sites may not pass user_id.
         self._cancel_tokens[job_id] = token
+        if user_id is not None:
+            self._active_job_by_user[user_id] = job_id
 
-    def cancel(self, job_id: JobId) -> None:
-        token = self._cancel_tokens.get(job_id)
-        if token is not None:
-            token.set()
+    def cancel_by_user(self, user_id: int) -> bool:
+        job_id = self._active_job_by_user.get(user_id)
+        if job_id is None:
+            return False
+        cancelled = self.cancel(job_id)
+        if cancelled:
+            # best-effort cleanup of mapping
+            self._active_job_by_user.pop(user_id, None)
+        return cancelled
+
+    def cancel(self, job_id: JobId) -> bool:
+        """Cancel a queued/running job.
+
+        Returns True if the job was known and cancellation signal was delivered.
+        Always removes the token from registry to avoid memory leaks.
+        """
+        token = self._cancel_tokens.pop(job_id, None)
+        if token is None:
+            return False
+        token.set()
+        return True
+
+    @staticmethod
+    def _raise_if_cancelled(cancel_event: asyncio.Event) -> None:
+        if cancel_event.is_set():
+            raise JobCancelledError()
 
     async def handle_job(self, job: Job, cancel_event: asyncio.Event) -> None:
         chat_id = int(job.chat_id)
         handle = self._anim.attach(chat_id=chat_id, message_id=int(job.status_message_id))
+
+        # Allow `/cancel` by user_id even if token registration happened without user_id.
+        self._active_job_by_user[int(job.user_id)] = job.job_id
+        self._cancel_tokens.setdefault(job.job_id, cancel_event)
 
         # UX: pause after acceptance before starting the mining loop.
         await asyncio.sleep(1.5)
@@ -76,10 +107,7 @@ class DownloadService:
 
         workdir: Path | None = None
         try:
-            if cancel_event.is_set():
-                await self._anim.stop_loop(handle)
-                await self._anim.finish(handle, text=UX_MINE_CANCELLED)
-                return
+            self._raise_if_cancelled(cancel_event)
 
             workdir = self._temp.allocate(str(job.job_id))
 
@@ -92,11 +120,9 @@ class DownloadService:
                     url=job.url,
                     extractor_format_id=video_fmt_id,
                     out_path=workdir / "muxed.stream",
+                    cancel_event=cancel_event,
                 )
-                if cancel_event.is_set():
-                    await self._anim.stop_loop(handle)
-                    await self._anim.finish(handle, text=UX_MINE_CANCELLED)
-                    return
+                self._raise_if_cancelled(cancel_event)
 
                 v_file = muxed_file
                 a_file = muxed_file
@@ -105,21 +131,17 @@ class DownloadService:
                     url=job.url,
                     extractor_format_id=video_fmt_id,
                     out_path=workdir / "video.stream",
+                    cancel_event=cancel_event,
                 )
-                if cancel_event.is_set():
-                    await self._anim.stop_loop(handle)
-                    await self._anim.finish(handle, text=UX_MINE_CANCELLED)
-                    return
+                self._raise_if_cancelled(cancel_event)
 
                 a_file = await self._ydl.download_stream(
                     url=job.url,
                     extractor_format_id=audio_fmt_id,
                     out_path=workdir / "audio.stream",
+                    cancel_event=cancel_event,
                 )
-                if cancel_event.is_set():
-                    await self._anim.stop_loop(handle)
-                    await self._anim.finish(handle, text=UX_MINE_CANCELLED)
-                    return
+                self._raise_if_cancelled(cancel_event)
 
             await self._anim.stop_loop(handle)
             await self._anim.set_text(handle, UX_MINE_CLEAN)
@@ -130,11 +152,12 @@ class DownloadService:
                     audio_path=a_file,
                     output_path=out_path,
                     container=job.choice.container,
-                )
+                ),
+                cancel_event=cancel_event,
             )
 
             await self._anim.set_text(handle, "🔎 Проверяю добычу…")
-            probe = await self._ffprobe.probe(merged)
+            probe = await self._ffprobe.probe(merged, cancel_event=cancel_event)
 
             self._pre_send_checks(job=job, output_path=merged, probe=probe)
 
@@ -144,6 +167,9 @@ class DownloadService:
             await self._anim.stop_loop(handle)
             await self._anim.finish(handle, text=UX_MINE_DONE)
 
+        except JobCancelledError:
+            await self._anim.stop_loop(handle)
+            await self._anim.finish(handle, text=UX_MINE_CANCELLED)
         except (YdlError, FfmpegError, FfprobeError):
             self._logger.exception("job failed: %s", job.job_id)
             await self._anim.stop_loop(handle)
@@ -159,6 +185,11 @@ class DownloadService:
         finally:
             # Always release per-user active job slot
             self._active.release(int(job.user_id))
+            self._cancel_tokens.pop(job.job_id, None)
+            # Drop per-user mapping for this job if present
+            uid = int(job.user_id)
+            if self._active_job_by_user.get(uid) == job.job_id:
+                self._active_job_by_user.pop(uid, None)
             if workdir is not None:
                 self._temp.cleanup(str(job.job_id))
 

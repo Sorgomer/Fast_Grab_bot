@@ -34,6 +34,7 @@ def build_dispatcher_and_bot(container: Container) -> tuple[Bot, Dispatcher]:
         get_formats=container.get("get_formats_uc"),
         enqueue=container.get("enqueue_download_uc"),
         status_animator=container.get("status_animator"),
+        cancel_download=container.get("cancel_download_uc"),
     )
 
     return bot, dp

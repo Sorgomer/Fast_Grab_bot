@@ -9,8 +9,12 @@ class CancelDownloadUseCase:
     def __init__(self, *, downloads: DownloadService) -> None:
         self._downloads = downloads
 
-    async def execute(self, *, job_id: str) -> CancelResultDTO:
-        cancelled = self._downloads.cancel(JobId(job_id))
+    async def execute(self, *, user_id: int, job_id: str | None = None) -> CancelResultDTO:
+        if job_id:
+            cancelled = self._downloads.cancel(JobId(job_id))
+        else:
+            cancelled = self._downloads.cancel_by_user(user_id)
+
         if cancelled:
-            return CancelResultDTO(cancelled=True, message="Ок, отменил.")
-        return CancelResultDTO(cancelled=False, message="Не получилось отменить (возможно, уже завершено).")
+            return CancelResultDTO(cancelled=True, message="⛏️⛔ Стоп-машина: добычу остановил.")
+        return CancelResultDTO(cancelled=False, message="⚒️ Нечего останавливать: активной добычи не вижу.")

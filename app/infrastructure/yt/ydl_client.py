@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from app.domain.models import AudioCodec, VideoCodec
 from app.domain.policies import RawExtractorFormat
+from asyncio.subprocess import PIPE, Process
+from app.domain.errors import JobCancelledError
 
 from .ydl_config import YdlConfig
 
@@ -184,60 +187,127 @@ class YdlClient:
 
         return ExtractResult(title=title, raw_formats=raw_formats, webpage_url=webpage_url)
 
-    async def download_stream(self, *, url: str, extractor_format_id: str, out_path: Path) -> Path:
-        try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(self._download_stream_sync, url, extractor_format_id, out_path),
-                timeout=self._cfg.download_timeout_sec,
-            )
-        except asyncio.TimeoutError as exc:
-            self._logger.error(
-                "yt-dlp download timeout after %ss: url=%s format=%s out=%s",
-                self._cfg.download_timeout_sec, url, extractor_format_id, str(out_path),
-            )
-            raise YdlError(
-                f"Downloader timed out after {self._cfg.download_timeout_sec}s while downloading media stream"
-            ) from exc
-
-    def _download_stream_sync(self, url: str, extractor_format_id: str, out_path: Path) -> Path:
-        try:
-            import yt_dlp  # type: ignore
-        except Exception as exc:
-            raise YdlError("yt-dlp is not installed") from exc
-
+    async def download_stream(
+        self,
+        *,
+        url: str,
+        extractor_format_id: str,
+        out_path: Path,
+        cancel_event: asyncio.Event | None = None,
+    ) -> Path:
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # IMPORTANT:
-        # - no postprocessors
-        # - no merge_output_format
-        # - we download exactly one stream by format id
-        ydl_opts: dict[str, Any] = {
-            "quiet": self._cfg.quiet,
-            "no_warnings": self._cfg.no_warnings,
-            "socket_timeout": self._cfg.socket_timeout_sec,
-            "retries": self._cfg.retries,
-            "restrictfilenames": self._cfg.restrict_filenames,
-            "noplaylist": True,
-            "format": extractor_format_id,
-            "outtmpl": str(out_path),
-            "paths": {"home": str(out_path.parent)},
-            "postprocessors": [],
-        }
+        # yt-dlp may change extension; use template
+        outtmpl = str(out_path) + ".%(ext)s"
+
+        cmd: list[str] = [
+            sys.executable,
+            "-m",
+            "yt_dlp",
+            "--no-playlist",
+            "--retries",
+            str(self._cfg.retries),
+            "--socket-timeout",
+            str(self._cfg.socket_timeout_sec),
+            "-f",
+            extractor_format_id,
+            "-o",
+            outtmpl,
+        ]
+
+        if self._cfg.quiet:
+            cmd.append("--quiet")
+        if self._cfg.no_warnings:
+            cmd.append("--no-warnings")
+        if self._cfg.restrict_filenames:
+            cmd.append("--restrict-filenames")
+
+        cmd.append(url)
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=PIPE,
+            stderr=PIPE,
+        )
+
+        async def _terminate(p: Process) -> None:
+            if p.returncode is not None:
+                return
+            try:
+                p.terminate()
+            except ProcessLookupError:
+                return
+            try:
+                await asyncio.wait_for(p.wait(), timeout=5)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                p.kill()
+            except ProcessLookupError:
+                return
+            await p.wait()
+
+        comm_task = asyncio.create_task(proc.communicate())
+        cancel_task: asyncio.Task[None] | None = None
+        if cancel_event is not None:
+            cancel_task = asyncio.create_task(cancel_event.wait())
 
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-        except Exception as exc:
-            raise YdlError("Failed to download stream") from exc
+            wait_set: set[asyncio.Task[object]] = {comm_task}
+            if cancel_task is not None:
+                wait_set.add(cancel_task)  # type: ignore[arg-type]
 
-        # yt-dlp might modify extension depending on stream; ensure we locate the actual file:
-        if out_path.exists():
-            return out_path
+            done, _ = await asyncio.wait(
+                wait_set,
+                timeout=self._cfg.download_timeout_sec,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
-        # Fallback: try any file with same stem
+            # timeout
+            if not done:
+                await _terminate(proc)
+                self._logger.error(
+                    "yt-dlp download timeout after %ss: url=%s format=%s out=%s",
+                    self._cfg.download_timeout_sec,
+                    url,
+                    extractor_format_id,
+                    str(out_path),
+                )
+                raise YdlError(
+                    f"Downloader timed out after {self._cfg.download_timeout_sec}s while downloading media stream"
+                )
+
+            # user cancel
+            if cancel_task is not None and cancel_task in done:
+                await _terminate(proc)
+                raise JobCancelledError()
+
+            stdout_b, stderr_b = await comm_task
+        finally:
+            if cancel_task is not None:
+                cancel_task.cancel()
+
+        if proc.returncode != 0:
+            self._logger.error(
+                "yt-dlp failed rc=%s url=%s format=%s out=%s stderr=%s",
+                proc.returncode,
+                url,
+                extractor_format_id,
+                str(out_path),
+                (stderr_b or b"").decode(errors="ignore").strip(),
+            )
+            raise YdlError("Failed to download stream")
+
+        # Locate the produced file
+        candidates = sorted(out_path.parent.glob(out_path.name + ".*"))
+        for c in candidates:
+            if c.is_file() and c.stat().st_size > 0:
+                return c
+
         candidates = sorted(out_path.parent.glob(out_path.name + "*"))
         for c in candidates:
-            if c.is_file():
+            if c.is_file() and c.stat().st_size > 0:
                 return c
 
         raise YdlError("Downloaded file not found on disk")

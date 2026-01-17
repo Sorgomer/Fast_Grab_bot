@@ -52,8 +52,6 @@ class DownloadQueue:
         while True:
             item = await self._queue.get()
             try:
-                if item.cancel_event.is_set():
-                    continue
                 await self._handler(item.job, item.cancel_event)
             except asyncio.CancelledError:
                 raise
