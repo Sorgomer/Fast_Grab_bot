@@ -13,6 +13,7 @@ from app.application.ports.status_animator import StatusAnimatorPort
 from app.constants import (
     UX_MINE_ENTER,
     UX_MINE_DOWNLOAD_FRAMES,
+    UX_MINE_PROBE,
     UX_MINE_CLEAN,
     UX_MINE_UPLOAD_FRAMES,
     UX_MINE_DONE,
@@ -156,7 +157,7 @@ class DownloadService:
                 cancel_event=cancel_event,
             )
 
-            await self._anim.set_text(handle, "🔎 Проверяю добычу…")
+            await self._anim.set_text(handle, UX_MINE_PROBE)
             probe = await self._ffprobe.probe(merged, cancel_event=cancel_event)
 
             self._pre_send_checks(job=job, output_path=merged, probe=probe)
@@ -169,7 +170,8 @@ class DownloadService:
 
         except JobCancelledError:
             await self._anim.stop_loop(handle)
-            await self._anim.finish(handle, text=UX_MINE_CANCELLED)
+            # удаляем статус-сообщение, а не заменяем текстом
+            await self._sender.delete_status(chat_id=handle.chat_id, message_id=handle.message_id)
         except (YdlError, FfmpegError, FfprobeError):
             self._logger.exception("job failed: %s", job.job_id)
             await self._anim.stop_loop(handle)

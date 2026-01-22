@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.application.dto import CancelResultDTO
 from app.application.services import DownloadService
 from app.domain.models import JobId
+from app.constants import UX_MINE_CANCELLED, UX_MINE_CANCEL_NOTHING
 
 
 class CancelDownloadUseCase:
@@ -16,5 +17,5 @@ class CancelDownloadUseCase:
             cancelled = self._downloads.cancel_by_user(user_id)
 
         if cancelled:
-            return CancelResultDTO(cancelled=True, message="⛏️⛔ Стоп-машина: добычу остановил.")
-        return CancelResultDTO(cancelled=False, message="⚒️ Нечего останавливать: активной добычи не вижу.")
+            return CancelResultDTO(cancelled=True, message=UX_MINE_CANCELLED)
+        return CancelResultDTO(cancelled=False, message=UX_MINE_CANCEL_NOTHING)

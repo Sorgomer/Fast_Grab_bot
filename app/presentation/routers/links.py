@@ -15,7 +15,8 @@ from app.constants import (
     UX_MINE_ENTER,
     UX_MINE_SEARCH,
     UX_MINE_TRY_LATER,
-    UX_MINE_UNSUPPORTED,
+    UX_PROMPT_SEND_LINK,
+    MSG_CHOOSE_QUALITY,
 )
 from app.domain.errors import DomainError
 from app.presentation.keyboards.formats import formats_keyboard
@@ -124,7 +125,7 @@ async def link_handler(
             (message.reply_to_message.text if message.reply_to_message else None),
             (message.reply_to_message.caption if message.reply_to_message else None),
         )
-        await message.answer("⛏️👷Я готов спуститься в шахту интернета.\nСкинь ссылку — добуду видео.")
+        await message.answer(UX_PROMPT_SEND_LINK)
         return
 
     chat_id = int(message.chat.id)
@@ -142,7 +143,7 @@ async def link_handler(
         text = getattr(exc, "user_message", None) or str(exc)
         low = text.lower()
         if "не поддерж" in low:
-            await status_animator.fail(handle, text=UX_MINE_UNSUPPORTED)
+            await status_animator.fail(handle, text=UX_MINE_BAD_LINK)
         elif "ссылка" in low or "http://" in low or "https://" in low:
             await status_animator.fail(handle, text=UX_MINE_BAD_LINK)
         else:
@@ -155,11 +156,11 @@ async def link_handler(
     kb = formats_keyboard(choices=dto.choices, version=dto.session_version)
     await status_animator.set_text(
         handle,
-        "Выбери качество:\n✅ - Пещера безопасна. Видео можно добыть\n⚠️ - Порода нестабильная. Результат не гарантирован.",
+        MSG_CHOOSE_QUALITY,
         reply_markup=kb,
     )
 
 
 @router.message(~F.text & ~F.caption)
 async def non_text_input_handler(message: Message) -> None:
-    await message.answer("⛏️👷Я готов спуститься в шахту интернета.\nСкинь ссылку — добуду видео.")
+    await message.answer(UX_PROMPT_SEND_LINK)

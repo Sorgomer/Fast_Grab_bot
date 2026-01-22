@@ -84,7 +84,7 @@ class StatusAnimator(StatusAnimatorPort):
         except asyncio.CancelledError:
             return
         except Exception:
-            self._logger.exception("loop task failed")
+            self._logger.exception("loop task failed: chat_id=%s message_id=%s", handle.chat_id, handle.message_id)
 
     async def finish(self, handle: StatusHandle, *, text: str) -> None:
         await self.stop_loop(handle)
@@ -97,12 +97,21 @@ class StatusAnimator(StatusAnimatorPort):
     async def _loop_worker(self, handle: StatusHandle, frames: tuple[str, ...]) -> None:
         idx = 0
         st = self._state.setdefault(handle, _HandleState())
-        try:
-            while not st.loop_stop.is_set():
+        while not st.loop_stop.is_set():
+            try:
                 await self._edit_throttled(handle, frames[idx], reply_markup=None, min_interval_sec=self._loop_interval)
                 idx = (idx + 1) % len(frames)
-        except asyncio.CancelledError:
-            return
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                # Do not let a transient Telegram error kill the animation forever.
+                self._logger.exception(
+                    "status loop edit failed; keeping loop alive: chat_id=%s message_id=%s",
+                    handle.chat_id,
+                    handle.message_id,
+                )
+                # Small backoff to avoid tight error loops.
+                await asyncio.sleep(max(0.5, self._loop_interval))
 
     async def _edit_throttled(self, handle: StatusHandle, text: str, *, reply_markup: Any | None, min_interval_sec: float) -> None:
         st = self._state.setdefault(handle, _HandleState())

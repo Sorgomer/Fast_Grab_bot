@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery
 from app.application.use_cases.enqueue_download import EnqueueDownloadUseCase
 from app.application.ports.status_animator import StatusAnimatorPort
 from app.presentation.callback_data import FormatSelectCb
+from app.constants import UX_MINE_ENTER, UX_MINE_DOWNLOAD_FRAMES
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -65,14 +66,11 @@ async def format_selected(
         return
 
     # Remove the keyboard immediately and show the initial acceptance text.
-    await status_animator.set_text(handle, "Принято\n🕸️ Вхожу в шахту интернета…", reply_markup=None)
+    await status_animator.set_text(handle, UX_MINE_ENTER, reply_markup=None)
 
     # After 1.5s start the mining loop. This runs in background and will be stopped
     # later by the download pipeline stages.
-    mining_frames = (
-        "⛏️👷‍♂️  🪨\nДобываю видео...",
-        "👷‍♂️⛏️💥🪨\nДобываю видео...",
-    )
+    mining_frames = UX_MINE_DOWNLOAD_FRAMES
 
     async def _delayed_start() -> None:
         try:

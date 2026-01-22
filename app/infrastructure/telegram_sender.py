@@ -54,12 +54,29 @@ class TelegramSender:
         *,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> None:
-        await self._bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            reply_markup=reply_markup,
-        )
+        try:
+            await self._bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
+        except TelegramBadRequest as exc:
+            # Common non-fatal case: Telegram rejects an edit when the text is effectively unchanged.
+            # Do not break status loops on this.
+            if "message is not modified" in str(exc).lower():
+                return
+            raise
+
+    async def delete_status(self, chat_id: int, message_id: int) -> None:
+        try:
+            await self._bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except TelegramBadRequest:
+            # Message may already be deleted or not deletable (too old, etc.). Ignore.
+            return
+        except Exception:
+            self._logger.exception("failed to delete status message chat_id=%s message_id=%s", chat_id, message_id)
+            return
 
     def _request_timeout_sec(self, size_bytes: int) -> int:
         # Telegram upload time strongly depends on network. Use a generous timeout based on size.
