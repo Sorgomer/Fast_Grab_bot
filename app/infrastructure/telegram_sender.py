@@ -9,6 +9,10 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+try:
+    from aiogram.exceptions import TelegramRetryAfter
+except ImportError:  # pragma: no cover
+    TelegramRetryAfter = None  # type: ignore[assignment]
 
 
 class TelegramSenderError(RuntimeError):
@@ -21,6 +25,13 @@ class TelegramSenderRejectedError(TelegramSenderError):
 
 class TelegramSenderNetworkAmbiguousError(TelegramSenderError):
     """Network timeout/error: delivery status is ambiguous, do NOT retry to avoid duplicates."""
+
+
+# Raised when a status message to edit was deleted or is no longer available.
+class TelegramSenderMessageNotFoundError(TelegramSenderError):
+    """Status message to edit was deleted or is no longer available."""
+
+    pass
 
 
 class TelegramSender:
@@ -54,18 +65,41 @@ class TelegramSender:
         *,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> None:
-        try:
+        async def _do_edit() -> None:
             await self._bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
                 text=text,
                 reply_markup=reply_markup,
             )
+
+        try:
+            await _do_edit()
+            return
         except TelegramBadRequest as exc:
-            # Common non-fatal case: Telegram rejects an edit when the text is effectively unchanged.
-            # Do not break status loops on this.
-            if "message is not modified" in str(exc).lower():
+            msg = str(exc).lower()
+            # Non-fatal: Telegram rejects an edit if the content is unchanged.
+            if "message is not modified" in msg:
                 return
+            # Message is gone or cannot be edited anymore.
+            if "message to edit not found" in msg or "message not found" in msg:
+                raise TelegramSenderMessageNotFoundError("status message not found") from exc
+            raise
+        except Exception as exc:
+            # FloodWait / RetryAfter: sleep and retry once.
+            if TelegramRetryAfter is not None and isinstance(exc, TelegramRetryAfter):  # type: ignore[arg-type]
+                retry_after = float(getattr(exc, "retry_after", 1.0))
+                await asyncio.sleep(max(0.0, retry_after))
+                try:
+                    await _do_edit()
+                    return
+                except TelegramBadRequest as exc2:
+                    msg2 = str(exc2).lower()
+                    if "message is not modified" in msg2:
+                        return
+                    if "message to edit not found" in msg2 or "message not found" in msg2:
+                        raise TelegramSenderMessageNotFoundError("status message not found") from exc2
+                    raise
             raise
 
     async def delete_status(self, chat_id: int, message_id: int) -> None:

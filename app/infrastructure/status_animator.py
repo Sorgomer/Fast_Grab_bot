@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from app.application.ports.status_animator import StatusAnimatorPort, StatusHandle
-from app.infrastructure.telegram_sender import TelegramSender
+from app.infrastructure.telegram_sender import TelegramSender, TelegramSenderMessageNotFoundError
 
 
 @dataclass(slots=True)
@@ -57,7 +57,12 @@ class StatusAnimator(StatusAnimatorPort):
         return handle
 
     async def set_text(self, handle: StatusHandle, text: str, *, reply_markup: Any | None = None) -> None:
-        await self._edit_throttled(handle, text, reply_markup=reply_markup, min_interval_sec=self._min_interval)
+        try:
+            await self._edit_throttled(handle, text, reply_markup=reply_markup, min_interval_sec=self._min_interval)
+        except TelegramSenderMessageNotFoundError:
+            # Message was deleted; nothing to update.
+            self._state.pop(handle, None)
+            return
 
     async def start_loop(self, handle: StatusHandle, *, frames: Sequence[str]) -> None:
         frames_t = tuple(frames)
@@ -103,14 +108,16 @@ class StatusAnimator(StatusAnimatorPort):
                 idx = (idx + 1) % len(frames)
             except asyncio.CancelledError:
                 return
+            except TelegramSenderMessageNotFoundError:
+                st.loop_stop.set()
+                self._state.pop(handle, None)
+                return
             except Exception:
-                # Do not let a transient Telegram error kill the animation forever.
                 self._logger.exception(
                     "status loop edit failed; keeping loop alive: chat_id=%s message_id=%s",
                     handle.chat_id,
                     handle.message_id,
                 )
-                # Small backoff to avoid tight error loops.
                 await asyncio.sleep(max(0.5, self._loop_interval))
 
     async def _edit_throttled(self, handle: StatusHandle, text: str, *, reply_markup: Any | None, min_interval_sec: float) -> None:
