@@ -4,14 +4,18 @@ from app.application.use_cases.cancel_download import CancelDownloadUseCase
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from app.constants import UX_PROMPT_SEND_LINK, UX_MINE_BAD_LINK
+from app.constants import UX_PROMPT_SEND_LINK, UX_MINE_BAD_LINK, UX_HELP
 
 router = Router()
 
 
-@router.message(Command("start", "help"))
+@router.message(Command("start"))
 async def start_handler(message: Message) -> None:
     await message.answer(UX_PROMPT_SEND_LINK)
+
+@router.message(Command("help"))
+async def start_handler(message: Message) -> None:
+    await message.answer(UX_HELP)
 
 @router.message(Command("cancel"))
 async def cancel_handler(message: Message, cancel_download: CancelDownloadUseCase) -> None:

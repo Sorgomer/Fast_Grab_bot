@@ -80,9 +80,16 @@ def build_graph(container: Container) -> None:
         best_effort_from_bytes=s.tg_best_effort_from_mb * 1024 * 1024,
     )
 
-    session_store = SessionStore()
-    rate_limiter: RateLimiterPort = RateLimiter(limit=s.rate_limit_per_user, window_sec=s.rate_limit_window_sec)
-    active_jobs = ActiveJobsRegistry(max_active_per_user=s.max_active_jobs_per_user)
+    session_store = SessionStore(ttl_sec=s.session_ttl_sec)
+    rate_limiter: RateLimiterPort = RateLimiter(
+        limit=s.rate_limit_per_user,
+        window_sec=s.rate_limit_window_sec,
+        idle_ttl_sec=s.rate_limiter_idle_ttl_sec,
+    )
+    active_jobs = ActiveJobsRegistry(
+        max_active_per_user=s.max_active_jobs_per_user,
+        stale_ttl_sec=s.active_jobs_stale_ttl_sec,
+    )
 
     temp_storage = TempStorage(root=s.temp_root)
 

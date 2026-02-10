@@ -21,6 +21,20 @@ class TempStorage:
     async def start(self) -> None:
         self._root.mkdir(parents=True, exist_ok=True)
 
+        # Cleanup leftovers from previous runs (crash/restart). Best-effort.
+        try:
+            for child in self._root.iterdir():
+                try:
+                    if child.is_dir():
+                        shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        child.unlink(missing_ok=True)
+                except Exception:
+                    continue
+        except Exception:
+            # Root might be missing or inaccessible; ignore at startup.
+            pass
+
     async def stop(self) -> None:
         # best-effort cleanup
         for p in list(self._allocated.values()):

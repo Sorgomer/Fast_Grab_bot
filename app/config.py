@@ -66,6 +66,9 @@ class Settings:
 
     # Stability
     max_active_jobs_per_user: int
+    session_ttl_sec: int
+    rate_limiter_idle_ttl_sec: int
+    active_jobs_stale_ttl_sec: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -90,6 +93,10 @@ class Settings:
 
         max_active_jobs_per_user = _env_int("MAX_ACTIVE_JOBS_PER_USER", default=1, min_value=1)
 
+        session_ttl_sec = _env_int("SESSION_TTL_SEC", default=900, min_value=60)
+        rate_limiter_idle_ttl_sec = _env_int("RATE_LIMITER_IDLE_TTL_SEC", default=3600, min_value=60)
+        active_jobs_stale_ttl_sec = _env_int("ACTIVE_JOBS_STALE_TTL_SEC", default=7200, min_value=300)
+
         s = cls(
             bot_token=token,
             log_level=log_level,
@@ -104,6 +111,9 @@ class Settings:
             tg_best_effort_from_mb=tg_best_effort_from_mb,
             tg_document_only_from_mb=tg_document_only_from_mb,
             max_active_jobs_per_user=max_active_jobs_per_user,
+            session_ttl_sec=session_ttl_sec,
+            rate_limiter_idle_ttl_sec=rate_limiter_idle_ttl_sec,
+            active_jobs_stale_ttl_sec=active_jobs_stale_ttl_sec,
         )
         s._validate()
         return s
